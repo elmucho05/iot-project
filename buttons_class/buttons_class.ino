@@ -1,6 +1,9 @@
 #include "BluetoothSerial.h"
 
-BluetoothSerial ESP_BT; // Create a Bluetooth Serial object
+BluetoothSerial ESP_BT;
+
+
+enum State { CLOSED_OFF, OPEN_RED, OPEN_GREEN, CLOSED_TAKEN }; // states of FSM
 
 // Define the Compartment structure
 struct Compartment {
@@ -8,123 +11,108 @@ struct Compartment {
   int greenLedPin;
   int openButtonPin;
   int confirmButtonPin;
-  bool isBoxOpen=false;
-  bool isPillConfirmed = false;
+  State currentState;
   byte lastStateOpenButton;
   byte lastStateConfirmButton;
 
-  // Initialize the compartment with the relevant pins
   void initialize(int redPin, int greenPin, int openPin, int confirmPin) {
     redLedPin = redPin;
     greenLedPin = greenPin;
     openButtonPin = openPin;
     confirmButtonPin = confirmPin;
-    isBoxOpen = false;
-    isPillConfirmed = false;
-    lastStateOpenButton = LOW;
-    lastStateConfirmButton = LOW;
+    currentState = CLOSED_OFF;
+    lastStateOpenButton = HIGH;
+    lastStateConfirmButton = HIGH;
 
     pinMode(redLedPin, OUTPUT);
     pinMode(greenLedPin, OUTPUT);
     pinMode(openButtonPin, INPUT_PULLUP);
     pinMode(confirmButtonPin, INPUT_PULLUP);
 
-    // Set initial LED state (off because box is closed)
     digitalWrite(redLedPin, LOW);
     digitalWrite(greenLedPin, LOW);
   }
 
-  // Open the compartment
-  void openCompartment() {
-    isBoxOpen = true;
-    if (isPillConfirmed) {
-      digitalWrite(redLedPin, LOW);  // Red LED off
-      digitalWrite(greenLedPin, HIGH); // Green LED on
-    } else {
-      digitalWrite(redLedPin, HIGH); // Red LED on
-      digitalWrite(greenLedPin, LOW);  // Green LED off
-    }
-  }
+  void updateState(byte currentStateOpenButton, byte currentStateConfirmButton) {
+    switch (currentState) {
+      case CLOSED_OFF:
+        // when i press open button
+        if (currentStateOpenButton == LOW && lastStateOpenButton == HIGH) {
+          currentState = OPEN_RED;
+          digitalWrite(redLedPin, HIGH);
+          digitalWrite(greenLedPin, LOW);
+          Serial.println("State: OPEN_RED (Box Opened, Red LED On)");
+        }
+        break;
 
-  // Close the compartment
-  void closeCompartment() {
-    isBoxOpen = false;
-    digitalWrite(redLedPin, LOW);   // Turn off red LED
-    digitalWrite(greenLedPin, LOW); // Turn off green LED
-  }
+      case OPEN_RED:
+        //after i open the box, if i take a pill
+        if (currentStateConfirmButton == LOW && lastStateConfirmButton == HIGH) {
+          currentState = OPEN_GREEN;
+          digitalWrite(redLedPin, LOW);
+          digitalWrite(greenLedPin, HIGH);
+          Serial.println("State: OPEN_GREEN (Pill Confirmed, Green LED On)");
+        }
+        // if i close the box, go the the state before
+        else if (currentStateOpenButton == LOW && lastStateOpenButton == HIGH) {
+          currentState = CLOSED_OFF;
+          digitalWrite(redLedPin, LOW);
+          digitalWrite(greenLedPin, LOW);
+          Serial.println("State: CLOSED_OFF (Box Closed, Lights Off)");
+        }
+        break;
 
-  // Confirm pill taken
-  void confirmPillTaken() {
-    if (isBoxOpen) {
-      isPillConfirmed = true;
-      digitalWrite(redLedPin, LOW);  // Turn off red LED
-      digitalWrite(greenLedPin, HIGH); // Turn on green LED
+      case OPEN_GREEN:
+        // while on green led, if i press again the green button, nothing happens, stays on the same state
+        if (currentStateConfirmButton == LOW && lastStateConfirmButton == HIGH) {
+          Serial.println("State: OPEN_GREEN (Pill Already Confirmed, Green LED On)");
+        }
+        // if i have taken the pill and then i close the box, go to state 4 where pill has been taken and leds are off
+        else if (currentStateOpenButton == LOW && lastStateOpenButton == HIGH) {
+          currentState = CLOSED_TAKEN;
+          digitalWrite(redLedPin, LOW);
+          digitalWrite(greenLedPin, LOW);
+          Serial.println("State: CLOSED_TAKEN (Box Closed, Pill Taken)");
+        }
+        break;
+
+      case CLOSED_TAKEN:
+        // pill taken, open box so go to state 3
+        if (currentStateOpenButton == LOW && lastStateOpenButton == HIGH) {
+          currentState = OPEN_GREEN;
+          digitalWrite(redLedPin, LOW);
+          digitalWrite(greenLedPin, HIGH);
+          Serial.println("State: OPEN_GREEN (Box Opened, Green LED On)");
+        }
+        break;
     }
-  }
-    void pillNotTaken() {
-    if (isBoxOpen) {
-      isPillConfirmed = false;
-      digitalWrite(redLedPin, HIGH);  // Turn off red LED
-      digitalWrite(greenLedPin, LOW); // Turn on green LED
-    }
+
+    // Update last button states
+    lastStateOpenButton = currentStateOpenButton;
+    lastStateConfirmButton = currentStateConfirmButton;
   }
 };
 
-// Create an array of 3 compartments
-Compartment compartments[3];
+Compartment compartments[1]; //will have 3 compartments
 
 void setup() {
   Serial.begin(115200);
   ESP_BT.begin("SmartMedsESP32");
   Serial.println("Bluetooth device is ready to pair");
 
-  // Initialize the compartments with their respective pins
-                          //red  green open confirm
-  compartments[0].initialize(16, 17, 35, 34); // Pins for compartment 1
-  //compartments[1].initialize(18, 19, 36, 37); // Pins for compartment 2
-  //compartments[2].initialize(20, 21, 38, 39); // Pins for compartment 3
-
+  // Initialize compartment and it's  pins
+  compartments[0].initialize(16, 17, 35, 34); // red green open confirm
   Serial.println("System initialized. All compartments are closed, and LEDs are off.");
 }
 
 void loop() {
-  for (int i = 0; i < 3; i++) {
-    // Read button states
+  for (int i = 0; i < 1; i++) { // Loop through compartments
     byte currentStateOpenButton = digitalRead(compartments[i].openButtonPin);
     byte currentStateConfirmButton = digitalRead(compartments[i].confirmButtonPin);
 
-    // Check for open/close button press (state transition)
-    if (currentStateOpenButton == LOW && compartments[i].lastStateOpenButton == HIGH) {
-      delay(50); // Debounce
-      compartments[i].isBoxOpen = !compartments[i].isBoxOpen;
-
-      if(compartments[i].isBoxOpen){
-        Serial.println("Box Opened");
-        if(compartments[i].isPillConfirmed){
-          compartments[i].confirmPillTaken();
-        }else{
-          compartments[i].pillNotTaken();
-        }
-      }else{
-        Serial.println("Box closed");
-        compartments[i].closeCompartment();
-      }
-    }
-    
-    // Check for confirm button press (state transition)
-    if (compartments[i].isBoxOpen && currentStateConfirmButton == LOW && compartments[i].lastStateConfirmButton == HIGH) {
-      delay(50); // Debounce
-      if (digitalRead(compartments[i].confirmButtonPin) == LOW) { // Confirm button press
-        compartments[i].confirmPillTaken();
-        Serial.print("Pill confirmed in Compartment ");
-        Serial.println(i + 1);
-      }
-    }
-
-    // Update the last button states
-    compartments[i].lastStateOpenButton = currentStateOpenButton;
-    compartments[i].lastStateConfirmButton = currentStateConfirmButton;
+    // just call the fsm update
+    compartments[i].updateState(currentStateOpenButton, currentStateConfirmButton);
   }
 
-  delay(20); // General debounce for the loop
+  delay(20);
 }
