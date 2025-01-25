@@ -94,6 +94,8 @@ struct Compartment {
 };
 
 Compartment compartments[1]; //will have 3 compartments
+unsigned long timestamp = 0; // For periodic Bluetooth data transmission
+
 
 void setup() {
   Serial.begin(115200);
@@ -109,9 +111,40 @@ void loop() {
   for (int i = 0; i < 1; i++) { // Loop through compartments
     byte currentStateOpenButton = digitalRead(compartments[i].openButtonPin);
     byte currentStateConfirmButton = digitalRead(compartments[i].confirmButtonPin);
-
+    
     // just call the fsm update
     compartments[i].updateState(currentStateOpenButton, currentStateConfirmButton);
+  }
+
+    if (millis() - timestamp > 5000) {
+    for (int i = 0; i < 1; i++) { // Send state of each compartment
+      ESP_BT.write(0xFF);                   // Start byte
+      ESP_BT.write(i + 1);                  // Compartment ID
+      ESP_BT.write(compartments[i].currentState); // Current FSM state
+      ESP_BT.write(0xFE);                   // End byte
+    }
+    Serial.println("Bluetooth data sent.");
+    timestamp = millis();
+    
+  }
+
+  // Handle incoming Bluetooth data
+  if (ESP_BT.available()) {
+    String received = ESP_BT.readString(); // Read incoming data
+    Serial.println("Received: " + received);
+
+    // Example: Parse received data for specific commands
+    if (received == "RESET") {
+      for (int i = 0; i < 1; i++) {
+        compartments[i].currentState = CLOSED_OFF; // Reset to initial state
+        digitalWrite(compartments[i].redLedPin, LOW);
+        digitalWrite(compartments[i].greenLedPin, LOW);
+        Serial.println("Compartment reset to CLOSED_OFF state.");
+      }
+    }
+
+    // Respond back with acknowledgment
+    ESP_BT.println("Acknowledged: " + received);
   }
 
   delay(20);
